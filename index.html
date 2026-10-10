@@ -1,0 +1,1401 @@
+<!DOCTYPE html>
+<html lang="de" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plyteq-Kniff</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class' };
+  </script>
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <!-- PeerJS: Verbindung direkt zwischen den Browsern (WebRTC), kein eigener Server nötig -->
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+    ::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 3px; }
+
+    .dice {
+      width: 64px; height: 64px; position: relative;
+      cursor: pointer; user-select: none;
+      transition: transform 0.15s ease;
+    }
+    .dice:hover { transform: translateY(-3px); }
+    .dice-face {
+      position: absolute; width: 100%; height: 100%;
+      background: linear-gradient(145deg, #ffffff, #f1f5f9);
+      border: 2px solid #cbd5e1; border-radius: 12px;
+      box-shadow: inset 0 0 6px rgba(0,0,0,0.1), 0 4px 6px rgba(0,0,0,0.3);
+      display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+      padding: 6px; box-sizing: border-box;
+    }
+    .pip {
+      display: block; align-self: center; justify-self: center;
+      width: 10px; height: 10px; background-color: #0f172a; border-radius: 50%;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+    }
+    .dice.held .dice-face {
+      background: linear-gradient(145deg, #fef08a, #eab308);
+      border-color: #ca8a04;
+      box-shadow: 0 0 12px rgba(234, 179, 8, 0.6), inset 0 0 4px rgba(0,0,0,0.2);
+    }
+    .dice.held { transform: translateY(-8px); }
+    .dice.disabled { cursor: default; }
+    .dice.disabled:hover { transform: none; }
+    .dice.held.disabled:hover { transform: translateY(-8px); }
+    .dice.rolling .dice-face { animation: roll 0.45s ease-out 1; }
+    @keyframes roll {
+      0%   { transform: rotate(0deg) scale(1); }
+      50%  { transform: rotate(200deg) scale(0.85); }
+      100% { transform: rotate(360deg) scale(1); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .dice.rolling .dice-face { animation: none; }
+    }
+    .sticky-col { position: sticky; left: 0; z-index: 1; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-sky-500 selection:text-white">
+
+  <!-- Header -->
+  <header class="bg-slate-900/80 border-b border-slate-800 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center text-xl shadow-lg shadow-sky-500/20">🎲</div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white">Plyteq-Kniff</h1>
+          <p class="text-xs text-slate-400">Online mit Freunden oder allein</p>
+        </div>
+      </div>
+      <div class="flex items-center justify-end flex-wrap gap-2">
+        <button id="sound-btn" onclick="toggleSound()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition border border-slate-700/50" title="Ton umschalten" aria-label="Ton umschalten">
+          <i class="fas fa-volume-up"></i>
+        </button>
+        <button onclick="showRulesModal()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 text-sm font-semibold transition border border-slate-700/50 flex items-center gap-2">
+          <i class="fas fa-book-open text-sky-400"></i> Regeln (für Rick)
+        </button>
+        <button onclick="showRecordsModal()" class="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold transition flex items-center gap-2">
+          <i class="fas fa-trophy text-amber-300"></i> <span class="hidden sm:inline">Rekorde</span>
+        </button>
+        <button onclick="openLobbyModal()" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold transition flex items-center gap-2">
+          <i class="fas fa-users"></i> <span id="menu-btn-label">Menü</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Banner -->
+  <div id="status-banner" class="hidden px-4 py-2 text-sm text-center font-medium border-b"></div>
+
+  <main class="max-w-7xl mx-auto px-4 py-6 flex-1 w-full grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+    <!-- Links: Zug, Würfel, Chat -->
+    <div class="lg:col-span-2 flex flex-col gap-6">
+
+      <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3 min-w-0">
+          <span id="current-player-avatar" class="text-3xl p-2 rounded-xl bg-slate-800/80 border border-slate-700/60">🎲</span>
+          <div class="min-w-0">
+            <div class="text-xs text-slate-400 font-medium">Am Zug</div>
+            <div id="current-player-name" class="text-base font-bold text-sky-400 truncate">–</div>
+          </div>
+        </div>
+        <div id="game-mode-tag" class="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 border border-slate-700 text-xs font-semibold flex items-center gap-2 shrink-0">
+          <i class="fas fa-circle-info"></i> Kein Spiel
+        </div>
+      </div>
+
+      <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl flex flex-col items-center justify-center min-h-[280px]">
+        <span id="rolls-left-badge" class="px-3 py-1 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 text-xs font-semibold">
+          Verbleibende Würfe: 3
+        </span>
+        <div class="flex flex-wrap justify-center gap-4 sm:gap-5 my-6" id="dice-board"></div>
+        <div id="dice-hint" class="text-xs text-slate-400 text-center min-h-[1.25rem] mb-3"></div>
+        <button id="roll-btn" onclick="rollDice()" class="px-8 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-bold text-lg shadow-lg shadow-sky-500/25 transition-all active:scale-95 flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100">
+          <i class="fas fa-dice"></i> Würfeln
+        </button>
+        <div class="mt-3 text-[11px] text-slate-500 hidden sm:block">Tastatur: Leertaste = würfeln, 1–5 = Würfel halten</div>
+      </div>
+
+      <div id="chat-card" class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col h-72">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+          <h3 class="text-sm font-bold text-slate-300 flex items-center gap-2"><i class="fas fa-comments text-sky-400"></i> Raum-Chat</h3>
+          <span class="text-xs text-slate-500 flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Live</span>
+        </div>
+        <div id="chat-messages" class="flex-1 overflow-y-auto space-y-2 pr-2 text-sm text-slate-300"></div>
+        <form onsubmit="sendChatMessage(event)" class="mt-3 flex gap-2">
+          <input type="text" id="chat-input" maxlength="200" autocomplete="off" placeholder="Nachricht schreiben..." class="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-sky-500 transition">
+          <button type="submit" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm transition" aria-label="Senden"><i class="fas fa-paper-plane"></i></button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Rechts: Punktekarte aller Spieler -->
+    <div class="lg:col-span-3 bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl">
+      <div class="flex items-center justify-between mb-3 border-b border-slate-800 pb-3">
+        <h2 class="text-base font-bold text-white flex items-center gap-2"><i class="fas fa-clipboard-list text-sky-400"></i> Punktekarte</h2>
+        <span id="scorecard-sub" class="text-xs text-slate-400"></span>
+      </div>
+      <div id="scorecard" class="overflow-x-auto"></div>
+    </div>
+  </main>
+
+  <!-- LOBBY / MENÜ -->
+  <div id="lobby-modal" class="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl my-auto">
+
+      <div class="text-center mb-5">
+        <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-sky-600 to-indigo-600 mx-auto flex items-center justify-center text-2xl mb-2 shadow-lg shadow-sky-500/20">🎲</div>
+        <h2 class="text-xl font-bold text-white">Plyteq-Kniff</h2>
+        <p id="char-subtitle" class="text-xs text-slate-400 mt-1">Wähle deine Spielfigur.</p>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-400 mb-2">Spielfigur</label>
+          <div class="grid grid-cols-4 gap-2.5" id="modal-character-grid"></div>
+        </div>
+
+        <!-- Startmenü (noch in keinem Raum) -->
+        <div id="menu-section" class="pt-3 border-t border-slate-800 space-y-3">
+          <div class="space-y-2">
+            <label class="block text-xs font-semibold text-slate-400">Raum beitreten</label>
+            <div class="flex gap-2">
+              <input type="text" id="room-code-input" maxlength="8" autocomplete="off" placeholder="Raumcode, z. B. K7M2P" class="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm text-white uppercase tracking-wider focus:outline-none focus:border-sky-500">
+              <button id="join-btn" onclick="joinRoom()" class="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-sm font-semibold transition disabled:opacity-50">Beitreten</button>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <button id="create-btn" onclick="createRoom()" class="p-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold transition flex items-center justify-center gap-2 disabled:opacity-50">
+              <i class="fas fa-plus-circle"></i> Raum erstellen
+            </button>
+            <button onclick="startSingleplayer()" class="p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-bold transition flex items-center justify-center gap-2 border border-slate-700">
+              <i class="fas fa-user"></i> Einzelspieler
+            </button>
+          </div>
+        </div>
+
+        <!-- Raum-Lobby -->
+        <div id="room-section" class="hidden pt-3 border-t border-slate-800 space-y-3">
+          <div class="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800">
+            <div>
+              <span class="text-[11px] text-slate-400 block">Raumcode</span>
+              <span id="display-room-code" class="font-mono font-bold text-sky-400 text-xl tracking-widest">-----</span>
+            </div>
+            <button onclick="copyInviteLink()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition">
+              <i class="fas fa-copy text-sky-400"></i> Link kopieren
+            </button>
+          </div>
+
+          <div id="lobby-summary" class="flex items-center justify-between rounded-xl bg-sky-500/10 border border-sky-500/20 px-3 py-2.5">
+            <div class="text-sm font-semibold text-sky-300" id="lobby-count-text">1 Spieler</div>
+            <div class="text-xs text-slate-400" id="lobby-wait-text"></div>
+          </div>
+
+          <div id="lobby-players-list" class="space-y-1.5 max-h-52 overflow-y-auto pr-1"></div>
+
+          <div id="host-start-container" class="hidden space-y-1.5">
+            <button id="start-btn" onclick="hostStartGame()" class="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-600/20 transition flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fas fa-play"></i> Spiel jetzt starten
+            </button>
+            <div id="start-hint" class="text-center text-xs text-slate-500"></div>
+          </div>
+          <div id="guest-waiting-msg" class="hidden text-center text-xs text-amber-400 py-1">
+            <i class="fas fa-hourglass-half mr-1"></i> Warten, bis der Host das Spiel startet ...
+          </div>
+
+          <button onclick="leaveToMenu()" class="w-full py-2 text-xs font-semibold rounded-xl bg-rose-600/15 hover:bg-rose-600/30 text-rose-300 border border-rose-600/30 transition">
+            Raum verlassen
+          </button>
+        </div>
+      </div>
+
+      <button onclick="closeLobbyModal()" id="close-modal-btn" class="mt-4 w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition">
+        Fenster schließen
+      </button>
+    </div>
+  </div>
+
+  <!-- ERGEBNIS -->
+  <div id="result-modal" class="hidden fixed inset-0 z-[60] bg-slate-950/90 backdrop-blur-md flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl my-auto">
+      <div class="text-center mb-4">
+        <div class="text-4xl mb-1">🏆</div>
+        <h3 class="text-xl font-bold text-white">Spiel beendet</h3>
+        <p id="result-winner" class="text-sm text-amber-300 mt-1"></p>
+      </div>
+      <div id="result-list" class="space-y-2"></div>
+      <div class="mt-5 space-y-2">
+        <button id="rematch-btn" onclick="sendAction({type:'rematch'})" class="hidden w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm transition">Nochmal spielen</button>
+        <button id="tolobby-btn" onclick="sendAction({type:'toLobby'})" class="hidden w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-semibold border border-slate-700 transition">Zurück in die Lobby</button>
+        <div id="result-wait" class="hidden text-center text-xs text-amber-400">Warten, bis der Host entscheidet ...</div>
+        <button onclick="leaveToMenu()" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition">Zum Hauptmenü</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- REGELN -->
+  <div id="rules-modal" class="hidden fixed inset-0 z-[70] bg-slate-950/85 backdrop-blur-md flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl my-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+        <h3 class="text-base font-bold text-white flex items-center gap-2"><i class="fas fa-book-open text-sky-400"></i> Regeln (für Rick)</h3>
+        <button onclick="closeRulesModal()" class="text-slate-400 hover:text-white text-lg" aria-label="Schließen"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="space-y-4 text-sm text-slate-300 max-h-[70vh] overflow-y-auto pr-1">
+        <section>
+          <h4 class="font-bold text-white mb-1">Ablauf</h4>
+          <ul class="list-disc pl-5 space-y-1">
+            <li>Du hast pro Zug bis zu <b>3 Würfe</b> mit 5 Würfeln.</li>
+            <li>Nach jedem Wurf kannst du Würfel <b>halten</b> (anklicken, sie werden gelb). Nur die anderen werden neu geworfen.</li>
+            <li>Danach <b>musst du ein Feld</b> in der Punktekarte wählen. Jedes Feld wird nur einmal belegt.</li>
+            <li>Passt nichts, streichst du ein Feld mit <b>0 Punkten</b>.</li>
+            <li>Das Spiel endet, wenn alle alle 13 Felder gefüllt haben. Die meisten Punkte gewinnen.</li>
+          </ul>
+        </section>
+        <section>
+          <h4 class="font-bold text-white mb-1">Oberer Block (1er bis 6er)</h4>
+          <ul class="list-disc pl-5 space-y-1">
+            <li>Es zählen nur Würfel mit der gewählten Zahl. Beispiel: 3× die 4 gibt beim 4er <b>12 Punkte</b>.</li>
+            <li><b>Bonus:</b> Mit mindestens <b>63 Punkten</b> im oberen Block gibt es <b>+35 Punkte</b>.</li>
+          </ul>
+        </section>
+        <section>
+          <h4 class="font-bold text-white mb-1">Unterer Block</h4>
+          <table class="w-full text-xs">
+            <tbody class="divide-y divide-slate-800">
+              <tr><td class="py-1.5 pr-3 font-semibold text-slate-200 whitespace-nowrap">Dreierpasch</td><td>3 gleiche Würfel → Summe aller Augen</td></tr>
+              <tr><td class="py-1.5 pr-3 font-semibold text-slate-200 whitespace-nowrap">Viererpasch</td><td>4 gleiche Würfel → Summe aller Augen</td></tr>
+              <tr><td class="py-1.5 pr-3 font-semibold text-slate-200 whitespace-nowrap">Full House</td><td>3 gleiche + 2 gleiche → 25 Punkte</td></tr>
+              <tr><td class="py-1.5 pr-3 font-semibold text-slate-200 whitespace-nowrap">Kleine Straße</td><td>4 Zahlen in Folge (z. B. 2-3-4-5) → 30 Punkte</td></tr>
+              <tr><td class="py-1.5 pr-3 font-semibold text-slate-200 whitespace-nowrap">Große Straße</td><td>5 Zahlen in Folge (1-2-3-4-5 oder 2-3-4-5-6) → 40 Punkte</td></tr>
+              <tr><td class="py-1.5 pr-3 font-semibold text-slate-200 whitespace-nowrap">Kniffel</td><td>5 gleiche Würfel → 50 Punkte</td></tr>
+              <tr><td class="py-1.5 pr-3 font-semibold text-slate-200 whitespace-nowrap">Chance</td><td>Beliebiger Wurf → Summe aller Augen</td></tr>
+            </tbody>
+          </table>
+        </section>
+        <section>
+          <h4 class="font-bold text-white mb-1">Kniffel-Bonus und Joker</h4>
+          <ul class="list-disc pl-5 space-y-1">
+            <li>Würfelst du einen <b>weiteren Kniffel</b>, obwohl du im Kniffel-Feld schon 50 Punkte hast, bekommst du <b>+100 Punkte</b>.</li>
+            <li><b>Joker:</b> Ist das Kniffel-Feld schon belegt, gilt der neue Kniffel als Joker. Ist das passende obere Feld noch frei, musst du es nehmen. Sonst darfst du ein freies unteres Feld wählen (Full House, Straßen zählen dann voll).</li>
+          </ul>
+        </section>
+        <section>
+          <h4 class="font-bold text-white mb-1">Online spielen</h4>
+          <ul class="list-disc pl-5 space-y-1">
+            <li>Der Host erstellt einen Raum und teilt Code oder Link. Jeder wählt eine eigene Figur.</li>
+            <li>Der Host startet das Spiel, sobald alle da sind. Der Host-Tab muss während des Spiels offen bleiben.</li>
+            <li>Konfetti gibt es bei Kniffel und bei der großen Straße. 🎉</li>
+          </ul>
+        </section>
+      </div>
+      <button onclick="closeRulesModal()" class="mt-4 w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition">Verstanden</button>
+    </div>
+  </div>
+
+  <!-- REKORDE -->
+  <div id="records-modal" class="hidden fixed inset-0 z-[70] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+        <h3 class="text-base font-bold text-white flex items-center gap-2"><i class="fas fa-trophy text-amber-400"></i> Rekorde</h3>
+        <button onclick="closeRecordsModal()" class="text-slate-400 hover:text-white text-lg" aria-label="Schließen"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="space-y-2 max-h-80 overflow-y-auto pr-1" id="records-list"></div>
+      <div class="mt-4 pt-3 border-t border-slate-800 text-center">
+        <p class="text-xs text-slate-500">Dein bester Wert pro Spielfigur wird in diesem Browser gespeichert.</p>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* =====================================================================
+   Konstanten
+   ===================================================================== */
+const CHARACTERS = [
+  { id: 1, name: "Oskar",  emoji: "🤎" },
+  { id: 2, name: "Joshi",  emoji: "🤖" },
+  { id: 3, name: "Flotzi", emoji: "💛" },
+  { id: 4, name: "Felep",  emoji: "👑" },
+  { id: 5, name: "Steini", emoji: "🗿" },
+  { id: 6, name: "Busti",  emoji: "🔥" },
+  { id: 7, name: "Rick",   emoji: "💙" },
+  { id: 8, name: "Gast",   emoji: "👤" }
+];
+const MAX_PLAYERS = CHARACTERS.length;
+
+const CATEGORIES = [
+  { id: 'ones',      name: '1er',                 section: 'upper', face: 1 },
+  { id: 'twos',      name: '2er',                 section: 'upper', face: 2 },
+  { id: 'threes',    name: '3er',                 section: 'upper', face: 3 },
+  { id: 'fours',     name: '4er',                 section: 'upper', face: 4 },
+  { id: 'fives',     name: '5er',                 section: 'upper', face: 5 },
+  { id: 'sixes',     name: '6er',                 section: 'upper', face: 6 },
+  { id: 'threeKind', name: 'Dreierpasch',         section: 'lower' },
+  { id: 'fourKind',  name: 'Viererpasch',         section: 'lower' },
+  { id: 'fullHouse', name: 'Full House (25)',     section: 'lower' },
+  { id: 'smallStr',  name: 'Kl. Straße (30)',     section: 'lower' },
+  { id: 'largeStr',  name: 'Gr. Straße (40)',     section: 'lower' },
+  { id: 'kniffel',   name: 'Kniffel (50)',        section: 'lower' },
+  { id: 'chance',    name: 'Chance',              section: 'lower' }
+];
+const UPPER_IDS = CATEGORIES.filter(c => c.section === 'upper').map(c => c.id);
+const UPPER = CATEGORIES.filter(c => c.section === 'upper');
+const LOWER = CATEGORIES.filter(c => c.section === 'lower');
+
+const ROOM_PREFIX = 'kniffel-room-';
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const PEER_OPTS = {
+  config: { iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:global.stun.twilio.com:3478' }
+  ] }
+};
+
+/* =====================================================================
+   Hilfsfunktionen
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const uid = () => Math.random().toString(36).slice(2, 10);
+const charById = id => CHARACTERS.find(c => c.id === id);
+
+function lsGet(key, fallback) {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { return fallback; }
+}
+function lsSet(key, val) { try { localStorage.setItem(key, val); } catch (e) {} }
+function ssGet(key) { try { return sessionStorage.getItem(key); } catch (e) { return null; } }
+function ssSet(key, val) { try { sessionStorage.setItem(key, val); } catch (e) {} }
+
+/* =====================================================================
+   Globaler Zustand
+   ===================================================================== */
+let myPid = ssGet('kniffel_pid');
+if (!myPid) { myPid = 'p_' + uid() + uid(); ssSet('kniffel_pid', myPid); }
+
+let myCharId = Number(lsGet('kniffel_char', '1'));
+if (!charById(myCharId)) myCharId = 1;
+
+let mode = null;          // null | 'single' | 'host' | 'guest'
+let peer = null;          // PeerJS-Instanz
+let conns = {};           // Host: pid -> DataConnection
+let hostConn = null;      // Gast: Verbindung zum Host
+let roomCode = null;
+let G = null;             // Spielzustand (Host = maßgeblich, Gäste = Spiegel)
+
+let soundEnabled = true;
+let busy = false;
+let actionLock = false;
+let lastRollNo = 0, lastFxId = 0, lastChatId = 0, lastStatus = null, savedGameId = null;
+let requestedCharId = null;
+let audioCtx = null;
+
+/* =====================================================================
+   Spiellogik (rein, ohne UI)
+   ===================================================================== */
+const isFive = d => d.every(v => v === d[0]);
+
+// Joker: Kniffel gewürfelt und das Kniffel-Feld ist bereits belegt (50 oder 0)
+function isJoker(scores, dice) {
+  return isFive(dice) && scores.kniffel !== undefined;
+}
+
+function calcScore(catId, dice, scores) {
+  const counts = {};
+  dice.forEach(v => counts[v] = (counts[v] || 0) + 1);
+  const vals = Object.values(counts);
+  const sum = dice.reduce((a, b) => a + b, 0);
+  const uniq = [...new Set(dice)].sort((a, b) => a - b).join('');
+  const joker = isJoker(scores, dice);
+
+  switch (catId) {
+    case 'ones':   return (counts[1] || 0) * 1;
+    case 'twos':   return (counts[2] || 0) * 2;
+    case 'threes': return (counts[3] || 0) * 3;
+    case 'fours':  return (counts[4] || 0) * 4;
+    case 'fives':  return (counts[5] || 0) * 5;
+    case 'sixes':  return (counts[6] || 0) * 6;
+    case 'threeKind': return vals.some(c => c >= 3) ? sum : 0;
+    case 'fourKind':  return vals.some(c => c >= 4) ? sum : 0;
+    case 'fullHouse': return (joker || (vals.includes(3) && vals.includes(2))) ? 25 : 0;
+    case 'smallStr':  return (joker || /1234|2345|3456/.test(uniq)) ? 30 : 0;
+    case 'largeStr':  return (joker || uniq === '12345' || uniq === '23456') ? 40 : 0;
+    case 'kniffel':   return isFive(dice) ? 50 : 0;
+    case 'chance':    return sum;
+  }
+  return 0;
+}
+
+// Welche Felder dürfen mit dem aktuellen Wurf gewählt werden?
+function allowedCats(scores, dice) {
+  const open = CATEGORIES.filter(c => scores[c.id] === undefined).map(c => c.id);
+  if (!isJoker(scores, dice)) return open;
+  const upperId = UPPER_IDS[dice[0] - 1];
+  if (open.includes(upperId)) return [upperId];                 // Pflicht: passendes oberes Feld
+  const lower = open.filter(id => !UPPER_IDS.includes(id));
+  return lower.length ? lower : open;                           // sonst unteres Feld, zuletzt oberes (0 Pkt)
+}
+
+function totals(p) {
+  let upper = 0, lower = 0;
+  UPPER.forEach(c => { if (p.scores[c.id] !== undefined) upper += p.scores[c.id]; });
+  LOWER.forEach(c => { if (p.scores[c.id] !== undefined) lower += p.scores[c.id]; });
+  const bonus35 = upper >= 63 ? 35 : 0;
+  const kb = (p.bonus || 0) * 100;
+  return { upper, lower, bonus35, kb, total: upper + bonus35 + lower + kb };
+}
+const isFull = p => Object.keys(p.scores).length === CATEGORIES.length;
+
+/* =====================================================================
+   Host-Logik (maßgeblicher Spielzustand)
+   ===================================================================== */
+function freshPlayer(pid, charId) {
+  const ch = charById(charId);
+  return { pid, charId, name: ch.name, emoji: ch.emoji, connected: true, scores: {}, bonus: 0 };
+}
+
+function newGame(status) {
+  return {
+    status, code: roomCode, players: [], active: 0,
+    dice: [1, 1, 1, 1, 1], held: [false, false, false, false, false],
+    rollsLeft: 3, rollNo: 0, fxId: 0, fx: null,
+    chat: [], chatId: 0, version: 0, gameId: uid()
+  };
+}
+
+function resetRound() {
+  G.active = 0;
+  G.dice = [1, 1, 1, 1, 1];
+  G.held = [false, false, false, false, false];
+  G.rollsLeft = 3;
+  G.rollNo = 0;
+  G.gameId = uid();
+  G.players.forEach(p => { p.scores = {}; p.bonus = 0; });
+}
+
+function resetTurn() {
+  G.rollsLeft = 3;
+  G.held = [false, false, false, false, false];
+}
+
+function addSys(text) { pushChat('', '', text, true); }
+function pushChat(name, emoji, text, system) {
+  G.chat.push({ id: ++G.chatId, name, emoji, text, system: !!system });
+  if (G.chat.length > 80) G.chat.shift();
+}
+
+function broadcast() {
+  G.version++;
+  const msg = { type: 'state', state: G };
+  Object.values(conns).forEach(c => { try { if (c.open) c.send(msg); } catch (e) {} });
+  render();
+}
+
+function activePlayer() { return G && G.players[G.active]; }
+
+function advanceTurn() {
+  const n = G.players.length;
+  for (let k = 1; k <= n; k++) {
+    const i = (G.active + k) % n;
+    const p = G.players[i];
+    if (p.connected && !isFull(p)) { G.active = i; resetTurn(); return; }
+  }
+  finishGame();
+}
+
+function finishGame() {
+  G.status = 'finished';
+  const ranking = [...G.players].sort((a, b) => totals(b).total - totals(a).total);
+  if (ranking.length) addSys(`🏆 ${ranking[0].emoji} ${ranking[0].name} gewinnt mit ${totals(ranking[0]).total} Punkten!`);
+}
+
+function firstFreeChar() {
+  const taken = new Set(G.players.map(p => p.charId));
+  return CHARACTERS.find(c => !taken.has(c.id));
+}
+
+// Verarbeitet jede Aktion – vom Host selbst oder von Gästen
+function handleAction(pid, a) {
+  if (!G || !a || typeof a.type !== 'string') return;
+  const player = G.players.find(p => p.pid === pid);
+  if (!player) return;
+  const isHostPlayer = (pid === myPid);
+  const turnOwner = activePlayer();
+  const myTurnNow = G.status === 'playing' && turnOwner && turnOwner.pid === pid;
+
+  switch (a.type) {
+    case 'selectChar': {
+      if (G.status !== 'lobby') return;
+      const ch = charById(Number(a.charId));
+      if (!ch || G.players.some(p => p.pid !== pid && p.charId === ch.id)) return;
+      player.charId = ch.id; player.name = ch.name; player.emoji = ch.emoji;
+      break;
+    }
+    case 'start': {
+      if (!isHostPlayer || G.status !== 'lobby' || G.players.length < 2) return;
+      G.status = 'playing';
+      resetRound();
+      addSys(`🚀 Das Spiel wurde gestartet – ${G.players.length} Spieler. ${G.players[0].emoji} ${G.players[0].name} beginnt.`);
+      break;
+    }
+    case 'roll': {
+      if (!myTurnNow || G.rollsLeft <= 0) return;
+      G.dice = G.dice.map((v, i) => G.held[i] ? v : 1 + Math.floor(Math.random() * 6));
+      G.rollsLeft--;
+      G.rollNo++;
+      break;
+    }
+    case 'hold': {
+      const i = Number(a.idx);
+      if (!myTurnNow || G.rollsLeft === 3 || G.rollsLeft === 0 || !(i >= 0 && i < 5)) return;
+      G.held[i] = !G.held[i];
+      break;
+    }
+    case 'claim': {
+      const cat = CATEGORIES.find(c => c.id === a.cat);
+      if (!myTurnNow || !cat || G.rollsLeft === 3) return;
+      if (player.scores[cat.id] !== undefined) return;
+      if (!allowedCats(player.scores, G.dice).includes(cat.id)) return;
+
+      const pts = calcScore(cat.id, G.dice, player.scores);
+      const gotBonus = isFive(G.dice) && player.scores.kniffel === 50;
+      if (gotBonus) player.bonus++;
+      player.scores[cat.id] = pts;
+
+      addSys(`${player.emoji} ${player.name}: ${pts} Pkt bei „${cat.name}“` + (gotBonus ? ' (+100 Kniffel-Bonus!)' : ''));
+      if ((cat.id === 'kniffel' && pts === 50) || (cat.id === 'largeStr' && pts === 40) || gotBonus) { G.fxId++; G.fx = 'kniffel'; }
+      advanceTurn();
+      break;
+    }
+    case 'chat': {
+      const text = String(a.text || '').trim().slice(0, 200);
+      if (!text) return;
+      pushChat(player.name, player.emoji, text, false);
+      break;
+    }
+    case 'rematch': {
+      if (!isHostPlayer || G.status !== 'finished') return;
+      G.players = G.players.filter(p => p.connected);
+      G.status = 'playing';
+      resetRound();
+      addSys('🔁 Neue Runde! ' + G.players[0].emoji + ' ' + G.players[0].name + ' beginnt.');
+      break;
+    }
+    case 'toLobby': {
+      if (!isHostPlayer || G.status !== 'finished' || mode !== 'host') return;
+      G.players = G.players.filter(p => p.connected);
+      G.status = 'lobby';
+      resetRound();
+      addSys('Zurück in der Lobby.');
+      break;
+    }
+    case 'leave': {
+      removeOrDisconnect(pid);
+      return;
+    }
+    default: return;
+  }
+  broadcast();
+}
+
+function removeOrDisconnect(pid) {
+  if (!G) return;
+  const idx = G.players.findIndex(p => p.pid === pid);
+  if (idx < 0) return;
+  const p = G.players[idx];
+  delete conns[pid];
+  if (G.status === 'lobby') {
+    G.players.splice(idx, 1);
+    addSys(`${p.emoji} ${p.name} hat den Raum verlassen.`);
+  } else {
+    p.connected = false;
+    addSys(`⚠️ ${p.emoji} ${p.name} hat die Verbindung verloren.`);
+    if (G.status === 'playing' && G.players[G.active] === p) advanceTurn();
+  }
+  broadcast();
+}
+
+function hostHandleJoin(conn, msg) {
+  const pid = String(msg.pid || '').slice(0, 60);
+  if (!pid) return conn.close();
+  const reqChar = charById(Number(msg.charId)) ? Number(msg.charId) : 1;
+  let p = G.players.find(x => x.pid === pid);
+
+  if (p) {                                  // Wiederverbindung
+    if (conns[pid] && conns[pid] !== conn) { try { conns[pid].close(); } catch (e) {} }
+    p.connected = true;
+    addSys(`${p.emoji} ${p.name} ist wieder verbunden.`);
+  } else {
+    if (G.status !== 'lobby') {
+      conn.send({ type: 'error', msg: 'Das Spiel in diesem Raum läuft bereits.' });
+      setTimeout(() => conn.close(), 300);
+      return;
+    }
+    if (G.players.length >= MAX_PLAYERS) {
+      conn.send({ type: 'error', msg: 'Der Raum ist voll.' });
+      setTimeout(() => conn.close(), 300);
+      return;
+    }
+    const wanted = G.players.some(x => x.charId === reqChar) ? firstFreeChar() : charById(reqChar);
+    p = freshPlayer(pid, wanted.id);
+    G.players.push(p);
+    addSys(`${p.emoji} ${p.name} ist beigetreten.`);
+  }
+  conn._pid = pid;
+  conns[pid] = conn;
+  broadcast();
+}
+
+function hostAttachConnection(conn) {
+  conn.on('data', msg => {
+    if (!msg || typeof msg.type !== 'string') return;
+    if (msg.type === 'join') hostHandleJoin(conn, msg);
+    else if (msg.type === 'action' && conn._pid && conns[conn._pid] === conn) handleAction(conn._pid, msg.a);
+  });
+  const onGone = () => {
+    if (conn._pid && conns[conn._pid] === conn) removeOrDisconnect(conn._pid);
+  };
+  conn.on('close', onGone);
+  conn.on('error', onGone);
+}
+
+/* =====================================================================
+   Netzwerk: Raum erstellen / beitreten / verlassen
+   ===================================================================== */
+function genCode() {
+  let s = '';
+  for (let i = 0; i < 5; i++) s += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+  return s;
+}
+
+function setBusy(v) {
+  busy = v;
+  $('create-btn').disabled = v;
+  $('join-btn').disabled = v;
+}
+
+function confirmLeave() {
+  if (G && G.status === 'playing' && mode) {
+    return confirm('Das laufende Spiel wirklich verlassen?');
+  }
+  return true;
+}
+
+function ensurePeerLib() {
+  if (typeof Peer === 'undefined') {
+    showBanner('Die Verbindungsbibliothek (PeerJS) konnte nicht geladen werden. Prüfe deine Internetverbindung und lade die Seite neu.', 'error');
+    return false;
+  }
+  return true;
+}
+
+function createRoom() {
+  if (busy || !ensurePeerLib() || !confirmLeave()) return;
+  if (mode) silentLeave();
+  setBusy(true);
+  showBanner('Raum wird erstellt ...', 'info');
+  tryCreate(0);
+}
+
+function tryCreate(attempt) {
+  const code = genCode();
+  const p = new Peer(ROOM_PREFIX + code, PEER_OPTS);
+  let opened = false;
+
+  p.on('open', () => {
+    opened = true;
+    peer = p; mode = 'host'; roomCode = code;
+    G = newGame('lobby');
+    G.players = [freshPlayer(myPid, myCharId)];
+    addSys(`Raum ${code} erstellt. Teile den Code oder Link mit deinen Freunden.`);
+    ssSet('kniffel_last_room', code);
+    setBusy(false);
+    hideBanner();
+    p.on('connection', hostAttachConnection);
+    broadcast();
+  });
+  p.on('disconnected', () => { if (!p.destroyed) { try { p.reconnect(); } catch (e) {} } });
+  p.on('error', err => {
+    if (!opened) {
+      try { p.destroy(); } catch (e) {}
+      if (err.type === 'unavailable-id' && attempt < 6) return tryCreate(attempt + 1);
+      setBusy(false);
+      showBanner('Raum konnte nicht erstellt werden: Der Vermittlungsserver ist nicht erreichbar. Versuche es gleich noch einmal.', 'error');
+    } else if (err.type !== 'peer-unavailable') {
+      console.warn('Peer-Fehler:', err);
+    }
+  });
+}
+
+function joinRoom() {
+  if (busy || !ensurePeerLib()) return;
+  const code = $('room-code-input').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!code) { showBanner('Bitte gib einen Raumcode ein.', 'warn'); return; }
+  if (!confirmLeave()) return;
+  if (mode) silentLeave();
+
+  setBusy(true);
+  showBanner('Verbinde mit Raum ' + code + ' ...', 'info');
+  requestedCharId = myCharId;
+
+  const p = new Peer(PEER_OPTS);
+  let done = false;
+  const fail = text => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    try { p.destroy(); } catch (e) {}
+    setBusy(false);
+    showBanner(text, 'error');
+  };
+  const timer = setTimeout(() => fail('Keine Verbindung zum Raum ' + code + ' möglich. Stimmt der Code? Läuft der Host noch?'), 12000);
+
+  p.on('error', err => {
+    if (err.type === 'peer-unavailable') fail('Raum ' + code + ' wurde nicht gefunden. Prüfe den Code.');
+    else if (!done) fail('Verbindungsfehler (' + err.type + '). Versuche es noch einmal.');
+  });
+
+  p.on('open', () => {
+    const c = p.connect(ROOM_PREFIX + code, { reliable: true });
+    c.on('open', () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      peer = p; hostConn = c; mode = 'guest'; roomCode = code;
+      ssSet('kniffel_last_room', code);
+      c.send({ type: 'join', pid: myPid, charId: myCharId });
+    });
+    c.on('data', onHostMessage);
+    c.on('close', () => { if (mode === 'guest' && hostConn === c) leaveToMenu('Die Verbindung zum Host wurde getrennt.', true); });
+    c.on('error', () => { if (!done) fail('Verbindung zum Raum fehlgeschlagen.'); });
+  });
+}
+
+function onHostMessage(msg) {
+  if (!msg || typeof msg.type !== 'string') return;
+  if (msg.type === 'state') {
+    const first = !G;
+    G = msg.state;
+    setBusy(false);
+    if (first) {
+      lastRollNo = G.rollNo; lastFxId = G.fxId; lastStatus = null;
+      hideBanner();
+      const me = G.players.find(p => p.pid === myPid);
+      if (me && requestedCharId && me.charId !== requestedCharId) {
+        showBanner(`Deine Wunschfigur war schon vergeben – du bist jetzt ${me.emoji} ${me.name}. Du kannst in der Lobby wechseln.`, 'warn');
+      }
+    }
+    render();
+  } else if (msg.type === 'error') {
+    leaveToMenu(msg.msg || 'Beitritt nicht möglich.', true);
+  } else if (msg.type === 'kicked') {
+    leaveToMenu('Du wurdest vom Host aus dem Raum entfernt.', true);
+  } else if (msg.type === 'closed') {
+    leaveToMenu('Der Host hat den Raum geschlossen.', true);
+  }
+}
+
+// Netzwerk abbauen, ohne UI zu verändern
+function silentLeave() {
+  const p = peer, hc = hostConn, cs = Object.values(conns), wasMode = mode;
+  mode = null; peer = null; hostConn = null; conns = {}; roomCode = null; G = null;
+  try {
+    if (wasMode === 'guest' && hc && hc.open) hc.send({ type: 'action', a: { type: 'leave' } });
+    if (wasMode === 'host') cs.forEach(c => { try { c.send({ type: 'closed' }); } catch (e) {} });
+  } catch (e) {}
+  if (p) setTimeout(() => { try { p.destroy(); } catch (e) {} }, 250);
+  lastStatus = null; lastChatId = 0; lastRollNo = 0; lastFxId = 0;
+  $('chat-messages').innerHTML = '';
+}
+
+function leaveToMenu(msg, skipConfirm) {
+  if (!skipConfirm && G && G.status === 'playing' && !confirm('Das laufende Spiel wirklich verlassen?')) return;
+  silentLeave();
+  setBusy(false);
+  $('result-modal').classList.add('hidden');
+  render();
+  openLobbyModal();
+  if (msg) showBanner(msg, 'warn');
+}
+
+/* =====================================================================
+   Aktionen aus der UI
+   ===================================================================== */
+function sendAction(a) {
+  if (!G) return;
+  if (mode === 'guest') {
+    if (hostConn && hostConn.open) hostConn.send({ type: 'action', a });
+  } else {
+    handleAction(myPid, a);
+  }
+}
+
+function lockAction() {
+  actionLock = true;
+  setTimeout(() => { if (actionLock) { actionLock = false; renderRollButton(); } }, 1500);
+}
+
+function isMyTurn() {
+  const p = activePlayer();
+  return !!(G && G.status === 'playing' && p && p.pid === myPid);
+}
+
+function rollDice() {
+  if (!isMyTurn() || G.rollsLeft <= 0 || actionLock) return;
+  lockAction();
+  sendAction({ type: 'roll' });
+  renderRollButton();
+}
+
+function toggleHold(i) {
+  if (!isMyTurn() || G.rollsLeft === 3 || G.rollsLeft === 0) return;
+  sendAction({ type: 'hold', idx: i });
+}
+
+function claim(catId) {
+  if (!isMyTurn() || G.rollsLeft === 3 || actionLock) return;
+  const p = activePlayer();
+  if (!allowedCats(p.scores, G.dice).includes(catId)) return;
+  const pts = calcScore(catId, G.dice, p.scores);
+  if (pts === 0) {
+    const name = CATEGORIES.find(c => c.id === catId).name;
+    if (!confirm(`„${name}“ mit 0 Punkten streichen?`)) return;
+  }
+  lockAction();
+  sendAction({ type: 'claim', cat: catId });
+}
+
+function selectModalCharacter(id) {
+  if (G && (mode === 'host' || mode === 'guest')) {
+    if (G.status !== 'lobby') return;
+    sendAction({ type: 'selectChar', charId: id });
+  } else {
+    myCharId = id;
+    lsSet('kniffel_char', String(id));
+    renderCharGrid();
+  }
+}
+
+function startSingleplayer() {
+  if (!confirmLeave()) return;
+  if (mode) silentLeave();
+  mode = 'single';
+  roomCode = null;
+  G = newGame('playing');
+  G.players = [freshPlayer(myPid, myCharId)];
+  resetRound();
+  addSys(`${G.players[0].emoji} ${G.players[0].name} hat ein Einzelspiel gestartet.`);
+  lastRollNo = 0; lastFxId = 0; lastStatus = null;
+  hideBanner();
+  render();
+}
+
+function hostStartGame() { sendAction({ type: 'start' }); }
+
+function kickPlayer(pid) {
+  if (mode !== 'host' || !G || G.status !== 'lobby' || pid === myPid) return;
+  const c = conns[pid];
+  try { if (c) c.send({ type: 'kicked' }); } catch (e) {}
+  removeOrDisconnect(pid);
+  if (c) setTimeout(() => { try { c.close(); } catch (e) {} }, 300);
+}
+
+function sendChatMessage(e) {
+  e.preventDefault();
+  const input = $('chat-input');
+  const val = input.value.trim();
+  if (!val || !G) return;
+  sendAction({ type: 'chat', text: val });
+  input.value = '';
+}
+
+function copyInviteLink() {
+  if (!roomCode) return;
+  const url = location.origin + location.pathname + '?room=' + roomCode;
+  const done = () => showBanner('Einladungslink kopiert: ' + url, 'ok', 4000);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done).catch(() => prompt('Link zum Kopieren:', url));
+  } else {
+    prompt('Link zum Kopieren:', url);
+  }
+}
+
+/* =====================================================================
+   Rendering
+   ===================================================================== */
+function render() {
+  if (G) {
+    const me = G.players.find(p => p.pid === myPid);
+    if (me && me.charId !== myCharId) { myCharId = me.charId; lsSet('kniffel_char', String(myCharId)); }
+  }
+  actionLock = false;
+
+  // Status-Übergänge
+  if (G && lastStatus !== G.status) {
+    if (G.status === 'lobby' && mode !== 'single') openLobbyModal();
+    else if (G.status === 'playing') closeLobbyModal();
+    lastStatus = G.status;
+  }
+
+  // Ton / Effekte bei neuen Würfen
+  if (G && G.rollNo !== lastRollNo) {
+    if (G.rollNo > 0) { playDiceSound(); animateDice(); }
+    lastRollNo = G.rollNo;
+  }
+  if (G && G.fxId !== lastFxId) {
+    lastFxId = G.fxId;
+    if (G.fx === 'kniffel' && typeof confetti === 'function') confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+  }
+
+  renderCharGrid();
+  renderHeader();
+  renderDice();
+  renderScorecard();
+  renderChat();
+  renderLobby();
+  renderResult();
+  updateModalSections();
+}
+
+function renderHeader() {
+  const tag = $('game-mode-tag');
+  const p = activePlayer();
+  $('chat-card').classList.toggle('hidden', mode === 'single');
+
+  if (!G) {
+    $('current-player-avatar').textContent = '🎲';
+    $('current-player-name').textContent = '–';
+    tag.innerHTML = '<i class="fas fa-circle-info"></i> Kein Spiel';
+    $('menu-btn-label').textContent = 'Menü';
+    return;
+  }
+  $('menu-btn-label').textContent = mode === 'single' ? 'Menü' : 'Lobby';
+
+  if (G.status === 'lobby') {
+    $('current-player-avatar').textContent = '⏳';
+    $('current-player-name').textContent = 'Lobby – Spiel startet gleich';
+  } else if (p) {
+    $('current-player-avatar').textContent = p.emoji;
+    $('current-player-name').textContent = p.pid === myPid ? p.name + ' (du)' : p.name;
+  }
+  tag.innerHTML = mode === 'single'
+    ? '<i class="fas fa-user text-sky-400"></i> Einzelspieler'
+    : `<i class="fas fa-users text-sky-400"></i> Raum ${esc(G.code || roomCode || '')}`;
+}
+
+/* ---- Würfel ---- */
+function getPipsHTML(val) {
+  const positions = { 1: [5], 2: [1, 9], 3: [1, 5, 9], 4: [1, 3, 7, 9], 5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9] };
+  const active = positions[val] || [];
+  let html = '';
+  for (let i = 1; i <= 9; i++) {
+    html += active.includes(i)
+      ? `<span class="pip" style="grid-area:${Math.ceil(i / 3)} / ${((i - 1) % 3) + 1};"></span>`
+      : '<span></span>';
+  }
+  return html;
+}
+
+function initDice() {
+  const board = $('dice-board');
+  board.innerHTML = '';
+  for (let i = 0; i < 5; i++) {
+    const d = document.createElement('div');
+    d.className = 'dice disabled';
+    d.id = 'die-' + i;
+    d.setAttribute('role', 'button');
+    d.setAttribute('aria-label', 'Würfel ' + (i + 1));
+    d.onclick = () => toggleHold(i);
+    d.innerHTML = '<div class="dice-face"></div>';
+    board.appendChild(d);
+  }
+}
+
+function renderDice() {
+  const dice = G ? G.dice : [1, 1, 1, 1, 1];
+  const held = G ? G.held : [false, false, false, false, false];
+  const canHold = !!G && isMyTurn() && G.rollsLeft > 0 && G.rollsLeft < 3;
+  const rolled = !!G && G.rollsLeft < 3;
+  for (let i = 0; i < 5; i++) {
+    const el = $('die-' + i);
+    el.firstChild.innerHTML = getPipsHTML(dice[i]);
+    el.classList.toggle('held', !!held[i] && rolled);
+    el.classList.toggle('disabled', !canHold);
+    el.style.opacity = (G && G.status === 'playing' && !rolled) ? '0.45' : '1';
+  }
+  $('rolls-left-badge').textContent = 'Verbleibende Würfe: ' + (G ? G.rollsLeft : 3);
+  renderRollButton();
+  renderHint();
+}
+
+function animateDice() {
+  if (!G) return;
+  for (let i = 0; i < 5; i++) {
+    if (G.held[i]) continue;
+    const el = $('die-' + i);
+    el.classList.remove('rolling');
+    void el.offsetWidth;
+    el.classList.add('rolling');
+    setTimeout(() => el.classList.remove('rolling'), 500);
+  }
+}
+
+function renderRollButton() {
+  const btn = $('roll-btn');
+  if (!G || G.status !== 'playing') {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-dice"></i> Würfeln';
+    return;
+  }
+  const p = activePlayer();
+  if (!isMyTurn()) {
+    btn.disabled = true;
+    btn.innerHTML = `Warten auf ${esc(p ? p.name : 'Mitspieler')} ...`;
+  } else if (G.rollsLeft === 0) {
+    btn.disabled = true;
+    btn.innerHTML = 'Wähle ein Feld';
+  } else {
+    btn.disabled = actionLock;
+    btn.innerHTML = '<i class="fas fa-dice"></i> Würfeln';
+  }
+}
+
+function renderHint() {
+  const el = $('dice-hint');
+  if (!G || G.status !== 'playing' || !isMyTurn()) { el.textContent = ''; return; }
+  const p = activePlayer();
+  if (G.rollsLeft === 3) el.textContent = 'Du bist dran – würfle!';
+  else if (isJoker(p.scores, G.dice)) {
+    const upperId = UPPER_IDS[G.dice[0] - 1];
+    el.textContent = p.scores[upperId] === undefined
+      ? '🃏 Joker: Du musst das passende obere Feld nehmen.'
+      : '🃏 Joker: Wähle ein beliebiges unteres Feld (volle Punkte).';
+  } else if (G.rollsLeft > 0) el.textContent = 'Tippe auf Würfel, um sie zu halten.';
+  else el.textContent = 'Keine Würfe mehr – trage dein Ergebnis in die Punktekarte ein.';
+}
+
+/* ---- Punktekarte (alle Spieler als Spalten) ---- */
+function renderScorecard() {
+  const box = $('scorecard');
+  if (!G) {
+    box.innerHTML = '<div class="text-center text-sm text-slate-500 py-10">Erstelle einen Raum, tritt einem bei oder starte ein Einzelspiel.</div>';
+    $('scorecard-sub').textContent = '';
+    return;
+  }
+  $('scorecard-sub').textContent = G.status === 'lobby' ? 'Wartet auf Spielstart' : '';
+
+  const myTurn = isMyTurn();
+  const rolled = G.rollsLeft < 3;
+  const ap = activePlayer();
+  const allowed = (myTurn && rolled && ap) ? allowedCats(ap.scores, G.dice) : [];
+
+  const cellBase = 'px-2 py-1.5 text-center text-xs border-t border-slate-800/70';
+  const th = G.players.map((p, i) => {
+    const active = G.status === 'playing' && i === G.active;
+    return `<th class="px-2 py-2 text-center text-xs font-semibold min-w-[72px] ${active ? 'bg-sky-500/15 text-sky-300' : 'text-slate-300'} ${p.connected ? '' : 'opacity-40'}">
+      <div class="text-lg leading-none">${esc(p.emoji)}</div>
+      <div class="truncate max-w-[84px] mx-auto">${esc(p.name)}${p.pid === myPid ? ' •' : ''}</div>
+      ${p.connected ? '' : '<div class="text-[10px] text-rose-400">getrennt</div>'}
+    </th>`;
+  }).join('');
+
+  const cell = (p, i, cat) => {
+    const active = G.status === 'playing' && i === G.active;
+    const bg = active ? 'bg-sky-500/5' : '';
+    const v = p.scores[cat.id];
+    if (v !== undefined) return `<td class="${cellBase} ${bg} font-bold text-sky-300">${v}</td>`;
+    if (active && p.pid === myPid && rolled) {
+      const ok = allowed.includes(cat.id);
+      const pts = calcScore(cat.id, G.dice, p.scores);
+      const cls = ok
+        ? (pts > 0 ? 'bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600 hover:text-white' : 'bg-slate-800 text-slate-400 hover:bg-rose-600 hover:text-white')
+        : 'bg-slate-900 text-slate-600 cursor-not-allowed opacity-40';
+      return `<td class="${cellBase} ${bg}"><button ${ok ? '' : 'disabled'} onclick="claim('${cat.id}')" class="w-full min-w-[44px] px-2 py-1 rounded transition ${cls}">${pts}</button></td>`;
+    }
+    return `<td class="${cellBase} ${bg} text-slate-700">·</td>`;
+  };
+
+  const catRows = list => list.map(cat => `
+    <tr><td class="sticky-col bg-slate-900 ${cellBase} text-left text-slate-300 font-medium whitespace-nowrap pr-3">${cat.name}</td>
+    ${G.players.map((p, i) => cell(p, i, cat)).join('')}</tr>`).join('');
+
+  const sumRow = (label, fn, extra) => `
+    <tr class="bg-slate-950/40"><td class="sticky-col bg-slate-950 ${cellBase} text-left text-slate-400 whitespace-nowrap pr-3">${label}</td>
+    ${G.players.map(p => `<td class="${cellBase} ${extra || 'text-slate-300'}">${fn(totals(p), p)}</td>`).join('')}</tr>`;
+
+  box.innerHTML = `
+    <table class="w-full border-collapse">
+      <thead><tr><th class="sticky-col bg-slate-900 px-2 py-2 text-left text-xs text-slate-400 font-medium">Feld</th>${th}</tr></thead>
+      <tbody>
+        ${catRows(UPPER)}
+        ${sumRow('Summe oben', t => `${t.upper} / 63`)}
+        ${sumRow('Bonus (+35)', t => t.bonus35 ? '<span class="text-emerald-400 font-bold">+35</span>' : '<span class="text-slate-600">0</span>')}
+        ${catRows(LOWER)}
+        ${sumRow('Kniffel-Bonus', t => t.kb ? `<span class="text-emerald-400 font-bold">+${t.kb}</span>` : '<span class="text-slate-600">0</span>')}
+        ${sumRow('Gesamt', t => t.total, 'text-sky-400 font-black text-sm')}
+      </tbody>
+    </table>`;
+}
+
+/* ---- Chat ---- */
+function renderChat() {
+  const box = $('chat-messages');
+  if (!G) return;
+  let added = false;
+  G.chat.forEach(m => {
+    if (m.id <= lastChatId) return;
+    const div = document.createElement('div');
+    if (m.system) {
+      div.className = 'text-xs text-slate-500 italic text-center py-0.5';
+      div.textContent = m.text;
+    } else {
+      div.className = 'p-2 rounded-lg bg-slate-950/60 border border-slate-800/60 text-xs';
+      const a = document.createElement('span');
+      a.className = 'font-bold text-sky-400 mb-0.5 block';
+      a.textContent = (m.emoji ? m.emoji + ' ' : '') + m.name;
+      const t = document.createElement('span');
+      t.className = 'text-slate-300 break-words';
+      t.textContent = m.text;
+      div.append(a, t);
+    }
+    box.appendChild(div);
+    lastChatId = m.id;
+    added = true;
+  });
+  if (added) box.scrollTop = box.scrollHeight;
+}
+
+/* ---- Lobby-Modal ---- */
+function renderCharGrid() {
+  const grid = $('modal-character-grid');
+  const inRoom = !!G && (mode === 'host' || mode === 'guest');
+  const locked = inRoom && G.status !== 'lobby';
+  const taken = new Set(inRoom ? G.players.filter(p => p.pid !== myPid).map(p => p.charId) : []);
+  const mine = inRoom ? ((G.players.find(p => p.pid === myPid) || {}).charId || myCharId) : myCharId;
+
+  grid.innerHTML = CHARACTERS.map(ch => {
+    const isTaken = taken.has(ch.id);
+    const isSel = ch.id === mine;
+    const disabled = isTaken || (locked && !isSel);
+    const cls = isSel ? 'bg-sky-600/20 border-sky-500 text-white'
+      : disabled ? 'bg-slate-900 border-slate-900 text-slate-600 opacity-40 cursor-not-allowed'
+      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-600';
+    return `<button type="button" ${disabled ? 'disabled' : ''} onclick="selectModalCharacter(${ch.id})" class="p-2.5 rounded-xl border ${cls} transition flex flex-col items-center gap-1 relative">
+      <span class="text-2xl">${ch.emoji}</span>
+      <span class="text-[10px] font-semibold truncate w-full text-center">${ch.name}</span>
+      ${isTaken ? '<span class="absolute -top-1 -right-1 text-[9px] bg-rose-500/30 text-rose-300 px-1 rounded">belegt</span>' : ''}
+    </button>`;
+  }).join('');
+
+  $('char-subtitle').textContent = inRoom
+    ? (G.status === 'lobby' ? 'Wähle eine Figur – bereits vergebene sind gesperrt.' : 'Das Spiel läuft – die Figur ist festgelegt.')
+    : 'Wähle deine Spielfigur.';
+}
+
+function renderLobby() {
+  const inRoom = !!G && (mode === 'host' || mode === 'guest');
+  if (!inRoom) return;
+  $('display-room-code').textContent = G.code || roomCode;
+
+  const n = G.players.length;
+  const inLobby = G.status === 'lobby';
+  $('lobby-count-text').textContent = `${n} von ${MAX_PLAYERS} Spielern im Raum`;
+  $('lobby-wait-text').textContent = inLobby
+    ? (n > 1 ? `${n - 1} ${n - 1 === 1 ? 'Gast wartet' : 'Gäste warten'} auf den Start` : 'Noch niemand beigetreten')
+    : (G.status === 'playing' ? 'Spiel läuft' : 'Spiel beendet');
+
+  $('lobby-players-list').innerHTML = G.players.map(p => {
+    const isHostRow = p.pid === G.players[0].pid;
+    const canKick = mode === 'host' && inLobby && p.pid !== myPid;
+    return `<div class="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-xs ${p.connected ? '' : 'opacity-50'}">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="text-base">${esc(p.emoji)}</span>
+        <span class="font-semibold text-white truncate">${esc(p.name)}</span>
+        ${p.pid === myPid ? '<span class="text-[10px] bg-sky-500/20 text-sky-400 px-1.5 py-0.5 rounded">Du</span>' : ''}
+        ${isHostRow ? '<span class="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-bold">Host</span>' : ''}
+        ${p.connected ? '' : '<span class="text-[10px] text-rose-400">getrennt</span>'}
+      </div>
+      <div class="flex items-center gap-2">
+        ${inLobby && !isHostRow ? '<span class="text-[10px] text-emerald-400"><i class="fas fa-check"></i> bereit</span>' : ''}
+        ${canKick ? `<button onclick="kickPlayer('${esc(p.pid)}')" class="text-rose-400 hover:text-rose-300" title="Entfernen" aria-label="Spieler entfernen"><i class="fas fa-user-xmark"></i></button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const hostBox = $('host-start-container');
+  const guestMsg = $('guest-waiting-msg');
+  if (mode === 'host' && inLobby) {
+    hostBox.classList.remove('hidden'); guestMsg.classList.add('hidden');
+    $('start-btn').disabled = n < 2;
+    $('start-hint').textContent = n < 2 ? 'Mindestens 2 Spieler nötig. Teile den Code oder Link.' : `${n} Spieler sind bereit.`;
+  } else {
+    hostBox.classList.add('hidden');
+    guestMsg.classList.toggle('hidden', !(mode === 'guest' && inLobby));
+  }
+}
+
+function updateModalSections() {
+  const inRoom = !!G && (mode === 'host' || mode === 'guest');
+  $('menu-section').classList.toggle('hidden', inRoom);
+  $('room-section').classList.toggle('hidden', !inRoom);
+  $('close-modal-btn').classList.toggle('hidden', !G);
+}
+
+function openLobbyModal() {
+  render_noModal();
+  $('lobby-modal').classList.remove('hidden');
+}
+function render_noModal() { renderCharGrid(); renderLobby(); updateModalSections(); }
+function closeLobbyModal() { if (G) $('lobby-modal').classList.add('hidden'); }
+
+/* ---- Ergebnis ---- */
+function renderResult() {
+  const modal = $('result-modal');
+  if (!G || G.status !== 'finished') { modal.classList.add('hidden'); return; }
+
+  const ranking = [...G.players].sort((a, b) => totals(b).total - totals(a).total);
+  const medals = ['🥇', '🥈', '🥉'];
+  $('result-winner').textContent = ranking.length > 1
+    ? `${ranking[0].emoji} ${ranking[0].name} gewinnt mit ${totals(ranking[0]).total} Punkten`
+    : `Dein Ergebnis: ${totals(ranking[0]).total} Punkte`;
+  $('result-list').innerHTML = ranking.map((p, i) => `
+    <div class="flex items-center justify-between p-3 rounded-xl bg-slate-950/80 border ${i === 0 ? 'border-amber-500/50' : 'border-slate-800'}">
+      <div class="flex items-center gap-3">
+        <span class="w-6 text-center">${medals[i] || (i + 1) + '.'}</span>
+        <span class="text-xl">${esc(p.emoji)}</span>
+        <span class="text-sm font-bold text-white">${esc(p.name)}${p.pid === myPid ? ' (du)' : ''}</span>
+      </div>
+      <span class="text-lg font-black text-amber-400">${totals(p).total}</span>
+    </div>`).join('');
+
+  const isHost = mode === 'host' || mode === 'single';
+  $('rematch-btn').classList.toggle('hidden', !isHost);
+  $('tolobby-btn').classList.toggle('hidden', mode !== 'host');
+  $('result-wait').classList.toggle('hidden', mode !== 'guest');
+
+  const wasHidden = modal.classList.contains('hidden');
+  modal.classList.remove('hidden');
+  $('lobby-modal').classList.add('hidden');
+
+  if (savedGameId !== G.gameId) {
+    savedGameId = G.gameId;
+    const me = G.players.find(p => p.pid === myPid);
+    if (me) saveRecord(me.name, me.emoji, totals(me).total);
+    if (wasHidden && typeof confetti === 'function' && ranking[0].pid === myPid) {
+      confetti({ particleCount: 200, spread: 100, origin: { y: 0.5 } });
+    }
+  }
+}
+
+/* =====================================================================
+   Rekorde
+   ===================================================================== */
+function loadRecords() {
+  try { const r = JSON.parse(lsGet('kniffel_records', '[]')); return Array.isArray(r) ? r : []; } catch (e) { return []; }
+}
+function saveRecord(name, emoji, score) {
+  const list = loadRecords();
+  const date = new Date().toLocaleDateString('de-DE');
+  const i = list.findIndex(r => r.name === name);
+  if (i >= 0) { if (score > list[i].score) list[i] = { name, emoji, score, date }; }
+  else list.push({ name, emoji, score, date });
+  list.sort((a, b) => b.score - a.score);
+  lsSet('kniffel_records', JSON.stringify(list));
+}
+function showRecordsModal() {
+  const list = loadRecords();
+  $('records-list').innerHTML = list.length === 0
+    ? '<div class="text-center text-xs text-slate-500 py-6">Noch keine Rekorde gespeichert.</div>'
+    : list.map((r, idx) => `
+      <div class="flex items-center justify-between p-3 rounded-xl bg-slate-950/80 border border-slate-800">
+        <div class="flex items-center gap-3">
+          <span class="font-bold text-sm text-slate-400 w-6">#${idx + 1}</span>
+          <span class="text-xl">${esc(r.emoji)}</span>
+          <div><span class="text-sm font-bold text-white block">${esc(r.name)}</span><span class="text-[10px] text-slate-500">${esc(r.date)}</span></div>
+        </div>
+        <span class="text-lg font-black text-amber-400">${esc(r.score)} Pkt</span>
+      </div>`).join('');
+  $('records-modal').classList.remove('hidden');
+}
+function closeRecordsModal() { $('records-modal').classList.add('hidden'); }
+function showRulesModal() { $('rules-modal').classList.remove('hidden'); }
+function closeRulesModal() { $('rules-modal').classList.add('hidden'); }
+
+/* =====================================================================
+   Ton, Banner, Tastatur
+   ===================================================================== */
+function playDiceSound() {
+  if (!soundEnabled) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(150, t);
+    osc.frequency.exponentialRampToValueAtTime(40, t + 0.15);
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(t); osc.stop(t + 0.15);
+  } catch (e) {}
+}
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  $('sound-btn').innerHTML = soundEnabled ? '<i class="fas fa-volume-up"></i>' : '<i class="fas fa-volume-mute"></i>';
+}
+
+let bannerTimer = null;
+function showBanner(msg, type, ms) {
+  const b = $('status-banner');
+  const styles = {
+    info:  'bg-sky-600/20 border-sky-500/30 text-sky-200',
+    ok:    'bg-emerald-600/20 border-emerald-500/30 text-emerald-200',
+    warn:  'bg-amber-600/20 border-amber-500/30 text-amber-200',
+    error: 'bg-rose-600/20 border-rose-500/30 text-rose-200'
+  };
+  b.className = 'px-4 py-2 text-sm text-center font-medium border-b ' + (styles[type] || styles.info);
+  b.textContent = msg;
+  clearTimeout(bannerTimer);
+  if (ms || type === 'warn' || type === 'ok') bannerTimer = setTimeout(hideBanner, ms || 7000);
+}
+function hideBanner() { $('status-banner').className = 'hidden'; }
+
+document.addEventListener('keydown', e => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!G || G.status !== 'playing') return;
+  if (!$('lobby-modal').classList.contains('hidden') || !$('records-modal').classList.contains('hidden') || !$('rules-modal').classList.contains('hidden')) return;
+  if (e.code === 'Space') { e.preventDefault(); rollDice(); }
+  else if (e.key >= '1' && e.key <= '5') toggleHold(Number(e.key) - 1);
+});
+
+/* =====================================================================
+   Start
+   ===================================================================== */
+window.addEventListener('load', () => {
+  initDice();
+  const urlRoom = new URLSearchParams(location.search).get('room');
+  const prefill = (urlRoom || ssGet('kniffel_last_room') || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (prefill) $('room-code-input').value = prefill;
+  $('room-code-input').addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(); });
+
+  render();
+  openLobbyModal();
+  if (urlRoom) showBanner(`Du wurdest in Raum ${prefill} eingeladen. Wähle eine Figur und klicke auf „Beitreten“.`, 'info', 10000);
+  if (typeof Peer === 'undefined') ensurePeerLib();
+});
+
+window.addEventListener('beforeunload', () => {
+  try { if (mode === 'guest' && hostConn && hostConn.open) hostConn.send({ type: 'action', a: { type: 'leave' } }); } catch (e) {}
+});
+</script>
+</body>
+</html>
